@@ -2,6 +2,8 @@ from dotenv import load_dotenv
 import os
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
+import time
+from spotipy.exceptions import SpotifyException
 
 load_dotenv()
 
@@ -33,6 +35,20 @@ def filter_clean_tracks(tracks):
             clean_tracks.append(track)
     return clean_tracks
 
+def add_tracks_with_retry(user_id, playlist_id, track_batch, max_retries=5):
+    for attempt in range(max_retries):
+        try:
+            sp.user_playlist_add_tracks(user_id, playlist_id, track_batch)
+            return
+        except SpotifyException as e:
+            if e.http_status == 429:  # Too Many Requests
+                retry_after = int(e.headers.get('Retry-After', 1))
+                print(f"Rate limited. Retrying after {retry_after} seconds...")
+                time.sleep(retry_after)
+            else:
+                raise
+    print("Max retries reached. Failed to add tracks.")
+
 def create_clean_playlist(original_playlist_id, clean_tracks):
     original_playlist = sp.playlist(original_playlist_id)
     user_id = sp.me()['id']
@@ -40,13 +56,25 @@ def create_clean_playlist(original_playlist_id, clean_tracks):
     new_playlist = sp.user_playlist_create(user_id, new_playlist_name, public=False)
     
     track_uris = [track['uri'] for track in clean_tracks]
-    sp.user_playlist_add_tracks(user_id, new_playlist['id'], track_uris)
+    
+    for i in range(0, len(track_uris), 100):
+        batch = track_uris[i:i+100]
+        add_tracks_with_retry(user_id, new_playlist['id'], batch)
     
     return new_playlist['id']
 
+def get_all_playlist_tracks(playlist_id):
+    tracks = []
+    results = sp.playlist_tracks(playlist_id)
+    tracks.extend(results['items'])
+    while results['next']:
+        results = sp.next(results)
+        tracks.extend(results['items'])
+    return tracks
+
 def create_clean_playlist_from_original():
     playlist_id = get_user_playlist()
-    tracks = sp.playlist_tracks(playlist_id)['items']
+    tracks = get_all_playlist_tracks(playlist_id)
     clean_tracks = filter_clean_tracks(tracks)
     new_playlist_id = create_clean_playlist(playlist_id, clean_tracks)
     return new_playlist_id
