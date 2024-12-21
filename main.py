@@ -27,12 +27,26 @@ def get_user_playlist():
     choice = int(input("Enter the number of the playlist you want to clean: ")) - 1
     return playlists['items'][choice]['id']
 
+def find_clean_version(track):
+    query = f"track:{track['name']} artist:{' '.join(artist['name'] for artist in track['artists'])}"
+    results = sp.search(q=query, type='track', limit=50)
+    
+    for item in results['tracks']['items']:
+        if item['name'] == track['name'] and not item['explicit']:
+            return item
+    
+    return None
+
 def filter_clean_tracks(tracks):
     clean_tracks = []
     for item in tracks:
         track = item['track']
         if not track['explicit']:
             clean_tracks.append(track)
+        else:
+            clean_version = find_clean_version(track)
+            if clean_version:
+                clean_tracks.append(clean_version)
     return clean_tracks
 
 def add_tracks_with_retry(user_id, playlist_id, track_batch, max_retries=5):
