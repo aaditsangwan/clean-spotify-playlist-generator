@@ -28,12 +28,27 @@ def get_user_playlist():
     return playlists['items'][choice]['id']
 
 def find_clean_version(track):
-    query = f"track:{track['name']} artist:{' '.join(artist['name'] for artist in track['artists'])}"
-    results = sp.search(q=query, type='track', limit=50)
+    track_name = track['name']
+    main_artist = track['artists'][0]['name']
+    query = f"track:{track_name} artist:{main_artist}"
     
-    for item in results['tracks']['items']:
-        if item['name'] == track['name'] and not item['explicit']:
-            return item
+    if len(query) > 250:
+        query = query[:250]  # Truncate if still too long
+    
+    try:
+        results = sp.search(q=query, type='track', limit=50, market='US')
+        
+        for item in results['tracks']['items']:
+            if item['name'].lower() == track_name.lower() and not item['explicit']:
+                return item
+        
+        # If no exact match is found, try a more lenient search
+        #for item in results['tracks']['items']:
+        #   if item['name'].lower().startswith(track_name.lower()) and not item['explicit']:
+        #      return item
+    
+    except SpotifyException as e:
+        print(f"Error searching for clean version of {track_name}: {str(e)}")
     
     return None
 
@@ -48,6 +63,7 @@ def filter_clean_tracks(tracks):
             if clean_version:
                 clean_tracks.append(clean_version)
     return clean_tracks
+
 
 def add_tracks_with_retry(user_id, playlist_id, track_batch, max_retries=5):
     for attempt in range(max_retries):
