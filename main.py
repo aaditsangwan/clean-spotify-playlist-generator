@@ -1,3 +1,4 @@
+import streamlit as st
 from dotenv import load_dotenv
 import os
 import spotipy
@@ -5,27 +6,54 @@ from spotipy.oauth2 import SpotifyOAuth
 import time
 from spotipy.exceptions import SpotifyException
 
+# Load environment variables
 load_dotenv()
 
-client_id = os.getenv("CLIENT_ID")
-client_secret = os.getenv("CLIENT_SECRET")
+# Set page config
+st.set_page_config(page_title="Spotify Clean Playlist Creator", page_icon="🎵", layout="wide")
 
-os.environ['SPOTIPY_CLIENT_ID'] = client_id
-os.environ['SPOTIPY_CLIENT_SECRET'] = client_secret
-os.environ['SPOTIPY_REDIRECT_URI'] = 'http://localhost:8888/callback'
+# Custom CSS
+st.markdown("""
+<style>
+    body {
+        font-family: 'Circular Std', 'Helvetica', 'Arial', sans-serif;
+    }
+    .stButton>button {
+        background-color: #1DB954;
+        color: white;
+        border-radius: 500px;
+        padding: 10px 20px;
+        font-weight: bold;
+    }
+    .stSlider .stSliderValue {
+        color: #1DB954;
+    }
+    @media (max-width: 600px) {
+        .stApp {
+            padding: 1rem;
+        }
+    }
+</style>
+""", unsafe_allow_html=True)
 
 # Set up Spotify OAuth
-scope = 'playlist-read-private playlist-modify-private'
-sp = spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
-
-def get_user_playlist():
-    playlists = sp.current_user_playlists()
-    print("Your playlists:")
-    for i, playlist in enumerate(playlists['items']):
-        print(f"{i+1}. {playlist['name']}")
+@st.cache_resource
+def get_spotify_client():
+    client_id = os.getenv("CLIENT_ID")
+    client_secret = os.getenv("CLIENT_SECRET")
     
-    choice = int(input("Enter the number of the playlist you want to clean: ")) - 1
-    return playlists['items'][choice]['id']
+    os.environ['SPOTIPY_CLIENT_ID'] = client_id
+    os.environ['SPOTIPY_CLIENT_SECRET'] = client_secret
+    os.environ['SPOTIPY_REDIRECT_URI'] = 'http://localhost:8501'
+    
+    scope = 'playlist-read-private playlist-modify-private'
+    return spotipy.Spotify(auth_manager=SpotifyOAuth(scope=scope))
+
+sp = get_spotify_client()
+
+def get_user_playlists():
+    playlists = sp.current_user_playlists()
+    return {playlist['name']: playlist['id'] for playlist in playlists['items']}
 
 def find_clean_version(track):
     track_name = track['name']
@@ -33,7 +61,7 @@ def find_clean_version(track):
     query = f"track:{track_name} artist:{main_artist}"
     
     if len(query) > 250:
-        query = query[:250]  # Truncate if still too long
+        query = query[:250]
     
     try:
         results = sp.search(q=query, type='track', limit=50, market='US')
@@ -41,14 +69,9 @@ def find_clean_version(track):
         for item in results['tracks']['items']:
             if item['name'].lower() == track_name.lower() and not item['explicit']:
                 return item
-        
-        # If no exact match is found, try a more lenient search
-        #for item in results['tracks']['items']:
-        #   if item['name'].lower().startswith(track_name.lower()) and not item['explicit']:
-        #      return item
     
     except SpotifyException as e:
-        print(f"Error searching for clean version of {track_name}: {str(e)}")
+        st.error(f"Error searching for clean version of {track_name}: {str(e)}")
     
     return None
 
@@ -64,20 +87,19 @@ def filter_clean_tracks(tracks):
                 clean_tracks.append(clean_version)
     return clean_tracks
 
-
 def add_tracks_with_retry(user_id, playlist_id, track_batch, max_retries=5):
     for attempt in range(max_retries):
         try:
             sp.user_playlist_add_tracks(user_id, playlist_id, track_batch)
             return
         except SpotifyException as e:
-            if e.http_status == 429:  # Too Many Requests
+            if e.http_status == 429:
                 retry_after = int(e.headers.get('Retry-After', 1))
-                print(f"Rate limited. Retrying after {retry_after} seconds...")
+                st.warning(f"Rate limited. Retrying after {retry_after} seconds...")
                 time.sleep(retry_after)
             else:
                 raise
-    print("Max retries reached. Failed to add tracks.")
+    st.error("Max retries reached. Failed to add tracks.")
 
 def create_clean_playlist(original_playlist_id, clean_tracks):
     original_playlist = sp.playlist(original_playlist_id)
@@ -102,15 +124,35 @@ def get_all_playlist_tracks(playlist_id):
         tracks.extend(results['items'])
     return tracks
 
-def create_clean_playlist_from_original():
-    playlist_id = get_user_playlist()
-    tracks = get_all_playlist_tracks(playlist_id)
-    clean_tracks = filter_clean_tracks(tracks)
-    new_playlist_id = create_clean_playlist(playlist_id, clean_tracks)
-    return new_playlist_id
+def main():
+    # Sidebar
+    with st.sidebar:
+        st.image("https://storage.googleapis.com/pr-newsroom-wp/1/2018/11/Spotify_Logo_RGB_White.png", width=200)
+        st.title("Navigation")
+        st.write("Welcome to the Spotify Clean Playlist Creator!")
+
+    # Main content
+    st.markdown("<h1 style='color: #1DB954;'>Spotify Clean Playlist Creator</h1>", unsafe_allow_html=True)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.header("Select Playlist")
+        playlists = get_user_playlists()
+        selected_playlist = st.selectbox("Choose a playlist to clean:", list(playlists.keys()))
+    
+    with col2:
+        st.header("Create Clean Playlist")
+        if st.button("Create Clean Playlist"):
+            with st.spinner("Creating clean playlist..."):
+                playlist_id = playlists[selected_playlist]
+                tracks = get_all_playlist_tracks(playlist_id)
+                clean_tracks = filter_clean_tracks(tracks)
+                new_playlist_id = create_clean_playlist(playlist_id, clean_tracks)
+            
+            st.success("Clean playlist created successfully!")
+            st.write(f"New playlist ID: {new_playlist_id}")
+            st.markdown(f"[Open in Spotify](https://open.spotify.com/playlist/{new_playlist_id})")
 
 if __name__ == "__main__":
-    print("Welcome to the Spotify Clean Playlist Creator!")
-    new_playlist_id = create_clean_playlist_from_original()
-    print(f"Clean playlist created successfully!")
-    print(f"New playlist ID: {new_playlist_id}")
+    main()
